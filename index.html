@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>教檢題庫系統 - 溫潤木質專注版</title>
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f5f5f4; color: #292524; }
+        .animate-fadeIn { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* 木質調柔和陰影 */
+        .soft-shadow { box-shadow: 0 10px 30px rgba(120, 113, 108, 0.08); }
+        .soft-shadow-hover:hover { box-shadow: 0 15px 35px rgba(120, 113, 108, 0.12); transform: translateY(-2px); transition: all 0.3s; }
+        
+        .wood-toggle:checked + div { background-color: #92400e; }
+        .wood-toggle:checked + div > div { transform: translateX(100%); }
+        
+        @media print {
+            body { background-color: #ffffff; color: #000000; }
+            .print-hidden { display: none !important; }
+            .print-break-inside-avoid { break-inside: avoid; page-break-inside: avoid; }
+            .print-page-break { page-break-before: always; }
+            .print-border { border: 1px solid #d6d3d1 !important; box-shadow: none !important; }
+            .print-exact-colors { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            .print-text-wrap { white-space: pre-wrap; word-wrap: break-word; }
+            img { max-width: 100% !important; height: auto !important; page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body class="antialiased selection:bg-amber-200 selection:text-amber-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const loadFirebaseModule = new Function('url', 'return import(url)');
+        const MY_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyDnsnTr2JqLx3gPvZ1WduedNtFRvMsdmzk",
+            authDomain: "tce-elementary-school.firebaseapp.com",
+            projectId: "tce-elementary-school",
+            storageBucket: "tce-elementary-school.firebasestorage.app",
+            messagingSenderId: "881960368020",
+            appId: "1:881960368020:web:2f084c67db7b39cfcfc181",
+            measurementId: "G-K62711WTDW"
+        };
+
+        const SUBJECTS = [
+            { id: 'learner_dev', name: '學習者發展與適性輔導', dbPrefix: 'TDAC', icon: '🧠', isReady: true },
+            { id: 'chinese', name: '國語文能力測驗', dbPrefix: 'TC', icon: '📖', isReady: false },
+            { id: 'edu_phil', name: '教育理念與實務', dbPrefix: 'EP', icon: '🌱', isReady: false },
+            { id: 'math', name: '數學能力測驗', dbPrefix: 'TM', icon: '📐', isReady: false },
+            { id: 'curriculum', name: '課程教學與評量', dbPrefix: 'CIA', icon: '📝', isReady: false }
+        ];
+
+        const YEARS = ['115', '114', '113', '112', '111', '110', '109', '108-2', '108-1', '107', '106', '105'];
+
+        const shuffleArray = (array) => {
+            let shuffled = [...array];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+            return shuffled;
+        };
+
+        const getCleanText = (val) => {
+            if (val === null || val === undefined) return "";
+            const str = String(val).trim();
+            if (['無', 'none', '-', 'null', 'n/a', 'na'].includes(str.toLowerCase())) return "";
+            return str;
+        };
+
+        const toHalfWidth = (str) => {
+            return str.replace(/[\uff01-\uff5e]/g, function(ch) {
+                return String.fromCharCode(ch.charCodeAt(0) - 0xfee0);
+            });
+        };
+
+        // 🖼️ 智慧圖片讀取元件 (支援本地圖檔讀取)
+        const ImageWithFallback = ({ src }) => {
+            const [hasError, setHasError] = useState(false);
+            
+            if (hasError) {
+                return (
+                    <div className="flex items-center gap-2 text-stone-500 bg-stone-200 p-3 rounded-lg border border-stone-300 shadow-sm print-hidden">
+                        <span className="text-xl">🖼️</span>
+                        <span className="font-bold text-sm">圖檔遺失 (請確認是否與網頁放同資料夾)：</span>
+                        <span className="font-mono text-sm text-amber-800 bg-white px-2 py-0.5 rounded shadow-sm">{src}</span>
+                    </div>
+                );
+            }
+            return (
+                <div className="border border-stone-200 rounded-lg p-2 bg-white shadow-sm inline-block">
+                    {/* 直接嘗試讀取 src，如果是本地檔案就會載入 */}
+                    <img src={src} alt="考題附圖" className="max-w-full h-auto max-h-64 rounded object-contain" onError={() => setHasError(true)} />
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [view, setView] = useState('home'); 
+            const [selectedSubject, setSelectedSubject] = useState(null);
+            
+            const [examMode, setExamMode] = useState('single'); 
+            const [selectedSingleYear, setSelectedSingleYear] = useState(null);
+            const [selectedRandomYears, setSelectedRandomYears] = useState([]);
+            const [availableYears, setAvailableYears] = useState([]); 
+            
+            const [currentPage, setCurrentPage] = useState(1);
+            const [examData, setExamData] = useState(null);
+            const [userAnswers, setUserAnswers] = useState({});
+            const [userTextAnswers, setUserTextAnswers] = useState({});
+            
+            const [markedQuestions, setMarkedQuestions] = useState(new Set());
+            const [timeLeft, setTimeLeft] = useState(80 * 60); 
+            const [showWrongOnly, setShowWrongOnly] = useState(false);
+            
+            const [modalConfig, setModalConfig] = useState({ isOpen: false, title: '', message: '', onConfirm: null, onCancel: null, confirmText: '確定', cancelText: '取消' });
+
+            const [adminYear, setAdminYear] = useState('114');
+            const [adminSubject, setAdminSubject] = useState('TDAC');
+            const [file, setFile] = useState(null);
+            const [isUploading, setIsUploading] = useState(false);
+            const [isDeleting, setIsDeleting] = useState(false);
+            const [logs, setLogs] = useState([]);
+            const [adminPassword, setAdminPassword] = useState('');
+            const [loginError, setLoginError] = useState('');
+
+            const [firestoreDb, setFirestoreDb] = useState(null);
+            const topRef = useRef(null);
+            const ITEMS_PER_MCQ_PAGE = 5;
+
+            useEffect(() => {
+                const initFirebase = async () => {
+                    try {
+                        const fbApp = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js');
+                        const fbAuth = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js');
+                        const fbFirestore = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+
+                        const app = fbApp.initializeApp(MY_FIREBASE_CONFIG);
+                        const auth = fbAuth.getAuth(app);
+                        setFirestoreDb(fbFirestore.getFirestore(app));
+                        await fbAuth.signInAnonymously(auth);
+                    } catch (error) {
+                        console.error("Firebase 初始化失敗:", error);
+                    }
+                };
+                initFirebase();
+            }, []);
+
+            useEffect(() => {
+                let timer;
+                if (view === 'exam' && examData) {
+                    timer = setInterval(() => {
+                        setTimeLeft((prev) => {
+                            if (prev <= 1) {
+                                clearInterval(timer);
+                                setModalConfig({
+                                    isOpen: true,
+                                    title: '⏳ 考試時間到',
+                                    message: '測驗 80 分鐘已結束，系統已自動為您交卷！',
+                                    confirmText: '看成績',
+                                    onConfirm: () => {
+                                        setModalConfig({ isOpen: false });
+                                        setView('result');
+                                        window.scrollTo(0, 0);
+                                    }
+                                });
+                                return 0;
+                            }
+                            return prev - 1;
+                        });
+                    }, 1000);
+                }
+                return () => clearInterval(timer);
+            }, [view, examData]);
+
+            const formatTime = (seconds) => {
+                const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+                const s = (seconds % 60).toString().padStart(2, '0');
+                return `${m}:${s}`;
+            };
+
+            const addLog = (message, type = "info") => {
+                setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), message, type }]);
+            };
+
+            const GlobalModal = () => {
+                if (!modalConfig.isOpen) return null;
+                return (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-stone-900/60 backdrop-blur-sm animate-fadeIn p-4">
+                        <div className="bg-stone-50 p-8 rounded-3xl shadow-2xl max-w-md w-full border border-stone-200">
+                            <h3 className="text-2xl font-black text-amber-900 mb-4 flex items-center gap-2">
+                                {modalConfig.title}
+                            </h3>
+                            <div className="text-stone-700 font-medium mb-8 whitespace-pre-line leading-relaxed text-lg">
+                                {modalConfig.message}
+                            </div>
+                            <div className="flex justify-end gap-3">
+                                {modalConfig.onCancel && (
+                                    <button onClick={modalConfig.onCancel} className="px-6 py-3 rounded-xl bg-stone-200 text-stone-700 font-bold hover:bg-stone-300 transition-colors">
+                                        {modalConfig.cancelText}
+                                    </button>
+                                )}
+                                <button onClick={modalConfig.onConfirm} className="px-6 py-3 rounded-xl bg-amber-800 text-white font-black hover:bg-amber-900 shadow-lg transition-transform hover:-translate-y-0.5">
+                                    {modalConfig.confirmText}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            const fetchAvailableYears = async (subject) => {
+                setView('loading_years');
+                setSelectedSubject(subject);
+                try {
+                    const fbFirestore = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                    const { collection, getDocs, query, limit } = fbFirestore;
+                    const checkPromises = YEARS.map(async (year) => {
+                        const colName = `exams_${year}_${subject.dbPrefix}`;
+                        try {
+                            const q = query(collection(firestoreDb, colName), limit(1));
+                            const snap = await getDocs(q);
+                            if (!snap.empty) return year;
+                        } catch (e) {}
+                        return null;
+                    });
+                    const results = await Promise.all(checkPromises);
+                    setAvailableYears(results.filter(y => y !== null));
+                    setView('years');
+                } catch (error) {
+                    setAvailableYears([]);
+                    setView('years');
+                }
+            };
+
+            const handleUploadExcel = () => {
+                if (!file) {
+                    setModalConfig({ isOpen: true, title: '⚠️ 提醒', message: '請先選擇整理好的 Excel 檔案！', onConfirm: () => setModalConfig({ isOpen: false }) });
+                    return;
+                }
+                const collectionName = `exams_${adminYear}_${adminSubject}`;
+                
+                // 🚨 終極防呆：再次確認年份
+                setModalConfig({
+                    isOpen: true,
+                    title: '🚨 重要確認',
+                    message: `您即將把檔案寫入至：\n👉 【 ${adminYear} 年度 】的資料庫\n\n如果選錯年份，會把別年的題目覆蓋掉喔！\n請確定這份 Excel 真的屬於 ${adminYear} 年。`,
+                    onCancel: () => setModalConfig({ isOpen: false }),
+                    onConfirm: () => { setModalConfig({ isOpen: false }); executeUpload(collectionName); }
+                });
+            };
+
+            const executeUpload = async (collectionName) => {
+                setIsUploading(true);
+                addLog(`開始讀取 Excel 檔案並準備寫入 ${adminYear}年度...`);
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const workbook = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+                        const excelData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { raw: false, defval: "" });
+                        const fbFirestore = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                        const { doc, setDoc } = fbFirestore;
+                        
+                        for (const rawRow of excelData) {
+                            const row = {};
+                            for (let key in rawRow) {
+                                let cleanKey = key.trim().replace(/Ａ/g, 'A').replace(/Ｂ/g, 'B').replace(/Ｃ/g, 'C').replace(/Ｄ/g, 'D');
+                                row[cleanKey] = rawRow[key];
+                            }
+
+                            // 智慧模糊辨識題型
+                            let rawType = String(row['題型'] || "").trim();
+                            let qType = 'mcq';
+                            if (rawType.includes('非選') || rawType.includes('問答') || rawType.includes('手寫')) {
+                                qType = 'non_mcq';
+                            } else if (rawType.includes('綜合') || rawType.includes('題組')) {
+                                qType = 'comprehensive';
+                            } else {
+                                qType = 'mcq';
+                            }
+
+                            let rawId = String(row['題號'] || "").trim();
+                            if (!rawId) rawId = `item_${Math.random().toString(36).substr(2, 5)}`;
+                            
+                            // 萬用關鍵字抓取說明與題組
+                            const blockContent = getCleanText(row['區塊內容']) || getCleanText(row['區塊說明']) || getCleanText(row['作答說明']) || getCleanText(row['說明']);
+                            const groupContent = getCleanText(row['題組']) || getCleanText(row['題組內容']) || getCleanText(row['題組說明']);
+
+                            const item = {
+                                type: qType, id: rawId,
+                                text: String(row['題目'] || "").trim(), image: getCleanText(row['圖片']),        
+                                block: blockContent, group: groupContent
+                            };
+
+                            const optA = getCleanText(row['選項A']); const optB = getCleanText(row['選項B']); 
+                            const optC = getCleanText(row['選項C']); const optD = getCleanText(row['選項D']);
+                            const hasOptions = optA || optB || optC || optD; 
+                            
+                            // 如果綜合題有 ABCD 選項，它就是選擇題的變體
+                            if (qType === 'mcq' || (qType === 'comprehensive' && hasOptions)) {
+                                item.options = [optA, optB, optC, optD].filter(val => val !== "");
+                                item.answer = String(row['正確/參考答案'] || row['正確答案'] || "").trim().toUpperCase();
+                                item.explanation = String(row['詳解/評分標準'] || row['詳解'] || "").trim();
+                            } else {
+                                item.method = String(row['詳解/評分標準'] || row['詳解'] || "").trim();
+                            }
+                            
+                            await setDoc(doc(firestoreDb, collectionName, item.id), { ...item, year: adminYear });
+                            addLog(`寫入成功: 題號 ${item.id} | 說明:${item.block ? '有' : '無'} | 題組:${item.group ? '有' : '無'}`, "success");
+                        }
+                        addLog(`🎉 全部 ${excelData.length} 題寫入完成！`, "success");
+                    } catch (err) { addLog("錯誤: " + err.message, "error"); }
+                    setIsUploading(false);
+                };
+                reader.readAsArrayBuffer(file);
+            };
+
+            const handleDeleteCollection = () => {
+                const collectionName = `exams_${adminYear}_${adminSubject}`;
+                setModalConfig({
+                    isOpen: true, title: '🗑️ 刪除警告',
+                    message: `確定要清空「${adminYear}年度」的考題嗎？\n刪除後將無法復原，只能重新上傳！`,
+                    confirmText: '確認刪除', cancelText: '取消',
+                    onCancel: () => setModalConfig({ isOpen: false }),
+                    onConfirm: () => { setModalConfig({ isOpen: false }); executeDelete(collectionName); }
+                });
+            };
+
+            const executeDelete = async (collectionName) => {
+                setIsDeleting(true);
+                addLog(`開始刪除 ${collectionName}...`, "info");
+                try {
+                    const fbFirestore = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                    const { collection, getDocs, deleteDoc, doc } = fbFirestore;
+                    const querySnapshot = await getDocs(collection(firestoreDb, collectionName));
+                    if (querySnapshot.empty) {
+                        addLog(`找不到資料，該年份已經是空的。`, "error");
+                    } else {
+                        let count = 0;
+                        for (const document of querySnapshot.docs) { await deleteDoc(doc(firestoreDb, collectionName, document.id)); count++; }
+                        addLog(`✅ 成功清除 ${count} 筆考題！現在可以重新上傳了。`, "success");
+                    }
+                } catch (err) { addLog("刪除失敗: " + err.message, "error"); }
+                setIsDeleting(false);
+            };
+
+            const startExam = async (mode, yearStr = null) => {
+                setExamMode(mode);
+                setCurrentPage(1);
+                setUserAnswers({});
+                setUserTextAnswers({});
+                setExamData(null);
+                setMarkedQuestions(new Set());
+                setTimeLeft(80 * 60);
+                setShowWrongOnly(false);
+                setView('exam');
+
+                const yearsToFetch = mode === 'single' ? [yearStr] : selectedRandomYears;
+                let allMcq = [], allNonMcq = [], allComp = [];
+
+                try {
+                    const fbFirestore = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                    const fetchPromises = yearsToFetch.map(async (year) => {
+                        const collectionName = `exams_${year}_${selectedSubject.dbPrefix}`;
+                        if (firestoreDb) {
+                            try {
+                                const snapshot = await fbFirestore.getDocs(fbFirestore.collection(firestoreDb, collectionName));
+                                if (!snapshot.empty) {
+                                    let mcq = [], nonMcq = [], comp = [];
+                                    snapshot.forEach(doc => {
+                                        const rawData = doc.data();
+                                        const item = { 
+                                            id: String(doc.id), year: String(year), 
+                                            type: getCleanText(rawData.type), text: getCleanText(rawData.text),
+                                            block: getCleanText(rawData.block), image: getCleanText(rawData.image),
+                                            group: getCleanText(rawData.group),
+                                            options: Array.isArray(rawData.options) ? rawData.options.map(getCleanText).filter(v=>v!=="") : [],
+                                            answer: getCleanText(rawData.answer).toUpperCase(),
+                                            explanation: getCleanText(rawData.explanation), method: getCleanText(rawData.method)
+                                        };
+                                        if (item.type === 'mcq') mcq.push(item);
+                                        else if (item.type === 'non_mcq') nonMcq.push(item);
+                                        else comp.push(item);
+                                    });
+                                    return { mcq, non_mcq: nonMcq, comprehensive: comp };
+                                }
+                            } catch (e) {}
+                        }
+                        return { mcq: [], non_mcq: [], comprehensive: [] };
+                    });
+                    
+                    const results = await Promise.all(fetchPromises);
+                    results.forEach(res => { allMcq = [...allMcq, ...res.mcq]; allNonMcq = [...allNonMcq, ...res.non_mcq]; allComp = [...allComp, ...res.comprehensive]; });
+                    
+                    if (mode === 'single') {
+                        // 🌟 完美數字排序邏輯，解決 21~25 不見的問題
+                        const sortById = (a, b) => {
+                            const matchA = String(a.id).match(/\d+/);
+                            const matchB = String(b.id).match(/\d+/);
+                            const numA = matchA ? parseInt(matchA[0], 10) : 0;
+                            const numB = matchB ? parseInt(matchB[0], 10) : 0;
+                            if (numA !== numB) return numA - numB;
+                            return String(a.id).localeCompare(String(b.id));
+                        };
+                        setExamData({ mcq: allMcq.sort(sortById), non_mcq: allNonMcq.sort(sortById), comprehensive: allComp.sort(sortById) });
+                    } else {
+                        setExamData({ mcq: shuffleArray(allMcq).slice(0, 25), non_mcq: shuffleArray(allNonMcq).slice(0, 3), comprehensive: shuffleArray(allComp).slice(0, 4) });
+                    }
+                } catch (error) { setView('home'); }
+            };
+
+            const toggleRandomYear = (year) => setSelectedRandomYears(prev => prev.includes(year) ? prev.filter(y => y !== year) : [...prev, year]);
+            const toggleMark = (id) => {
+                const newMarked = new Set(markedQuestions);
+                if (newMarked.has(id)) newMarked.delete(id); else newMarked.add(id);
+                setMarkedQuestions(newMarked);
+            };
+
+            const getScore = () => {
+                if (!examData) return { count: 0, score: 0 };
+                const allMcqType = [...examData.mcq, ...examData.comprehensive.filter(q => q.options && q.options.length > 0)];
+                const correctCount = allMcqType.filter(q => userAnswers[q.id] === q.answer).length;
+                return { count: correctCount, score: correctCount * 2 };
+            };
+
+            const handlePreSubmit = () => {
+                let totalMcq = 0; let answeredMcq = 0;
+                const checkQ = (q) => {
+                    if (q.options && q.options.length > 0) {
+                        totalMcq++; if (userAnswers[q.id]) answeredMcq++;
+                    }
+                };
+                examData.mcq.forEach(checkQ); examData.comprehensive.forEach(checkQ);
+                const unanswered = totalMcq - answeredMcq;
+                const markedCount = markedQuestions.size;
+                let msg = '';
+                if (unanswered > 0) msg += `您還有 ${unanswered} 題選擇題未作答。\n`;
+                if (markedCount > 0) msg += `您有 ${markedCount} 題已標記星號 (猶豫中)。\n`;
+                
+                setModalConfig({
+                    isOpen: true, title: '📝 交卷確認',
+                    message: msg !== '' ? `${msg}\n確定要現在交卷嗎？` : '您已完成所有選擇題作答，確定要交卷嗎？',
+                    cancelText: '繼續作答', confirmText: '確認交卷',
+                    onCancel: () => setModalConfig({ isOpen: false }),
+                    onConfirm: () => { setModalConfig({ isOpen: false }); setView('result'); window.scrollTo(0,0); }
+                });
+            };
+
+            const QuestionContent = ({ q, idx }) => (
+                <div className="mb-2">
+                    <div className="flex items-start gap-2 mb-3 mt-2">
+                        {idx !== undefined && <span className="text-amber-800 font-black text-xl shrink-0">{idx + 1}.</span>}
+                        <p className="font-bold text-stone-800 text-lg leading-relaxed whitespace-pre-line w-full mt-0.5">
+                            {examMode === 'random' && <span className="bg-stone-200 text-stone-600 text-xs px-2 py-1 rounded mr-2 border align-middle">[{q.year}]</span>}
+                            {q.text}
+                        </p>
+                    </div>
+                    {/* 使用智慧圖檔載入元件 */}
+                    {q.image && q.image.trim() !== "" && (
+                        <div className="mb-4 ml-8">
+                            <ImageWithFallback src={q.image.trim()} />
+                        </div>
+                    )}
+                </div>
+            );
+
+            if (view === 'home') {
+                return (
+                    <div className="min-h-screen flex flex-col relative">
+                        <header className="bg-[#6B4E31] text-stone-50 shadow-lg py-16 px-4 text-center">
+                            <h1 className="text-3xl md:text-5xl font-black tracking-wide mb-4">🏆 國民小學教師檢定題庫系統</h1>
+                            <h2 className="text-xl md:text-2xl font-bold text-amber-100 bg-[#543b24] inline-block px-8 py-2.5 rounded-full border border-[#856341] soft-shadow">歷屆考古題</h2>
+                        </header>
+                        <main className="flex-grow max-w-6xl mx-auto w-full px-4 py-12">
+                            <div className="mb-10 text-center">
+                                <span className="bg-amber-100 text-amber-900 font-bold px-5 py-2 rounded-full text-sm shadow-sm border border-amber-200">💡 目前開放專注測試科目：TDAC</span>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                                {SUBJECTS.map(sub => (
+                                    <div key={sub.id} onClick={() => { if(sub.isReady) fetchAvailableYears(sub); }} 
+                                        className={`rounded-3xl p-8 border-2 transition-all flex flex-col items-center text-center relative
+                                            ${sub.isReady ? 'bg-white border-stone-100 soft-shadow soft-shadow-hover cursor-pointer' : 'bg-stone-200/50 border-stone-200 opacity-60 cursor-not-allowed grayscale'}`}>
+                                        {!sub.isReady && <div className="absolute top-4 right-4 bg-stone-700 text-white text-xs font-bold px-3 py-1 rounded-full shadow">🔒 尚未開放</div>}
+                                        <div className={`text-6xl mb-6 w-28 h-28 flex items-center justify-center rounded-full ${sub.isReady ? 'bg-[#fcf8f2] text-[#8c6b4a]' : 'bg-stone-200 text-stone-500'}`}>{sub.icon}</div>
+                                        <h3 className="text-2xl font-black text-stone-800 mb-2">{sub.name}</h3>
+                                        <p className="text-stone-500 font-bold text-sm bg-stone-100 px-4 py-1.5 rounded-full mt-2 tracking-widest">{sub.dbPrefix}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </main>
+                        <div className="py-8 text-center text-stone-400 border-t border-stone-200 mt-auto bg-stone-200/30">
+                            <button onClick={() => { setView('admin_login'); setAdminPassword(''); setLoginError(''); }} className="text-sm font-bold hover:text-amber-800 transition-colors px-6 py-2 rounded-full hover:bg-stone-200">⚙️ 題庫管理後台</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (view === 'admin_login') {
+                const handleLogin = () => {
+                    const normalizedPassword = toHalfWidth(adminPassword.trim());
+                    if (normalizedPassword === '660828') { setView('admin'); setAdminPassword(''); setLoginError(''); }
+                    else { setLoginError('密碼錯誤，請重新輸入！'); }
+                };
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-4">
+                        <div className="bg-white p-10 rounded-[2rem] soft-shadow w-full max-w-md border border-stone-100 text-center animate-fadeIn">
+                            <div className="text-6xl mb-6">🔐</div>
+                            <h2 className="text-2xl font-black text-stone-800 mb-2">管理員登入</h2>
+                            <p className="text-stone-500 font-medium mb-6">請輸入密碼以進入題庫系統</p>
+                            <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(); }} placeholder="請輸入密碼" className="w-full p-4 border-2 border-stone-200 rounded-xl mb-2 text-center text-xl font-bold tracking-[0.3em] focus:border-amber-700 outline-none bg-stone-50" autoFocus />
+                            <div className="h-6 mb-4">{loginError && <span className="text-rose-500 font-bold text-sm">{loginError}</span>}</div>
+                            <button onClick={handleLogin} className="w-full bg-[#8C6B4A] hover:bg-[#705439] text-white font-black text-lg py-4 rounded-xl shadow-lg transition-transform hover:-translate-y-1 mb-4">進入後台</button>
+                            <button onClick={() => setView('home')} className="text-stone-500 font-bold text-sm underline">取消並返回首頁</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (view === 'loading_years') {
+                return (
+                    <div className="min-h-screen flex flex-col items-center justify-center">
+                        <div className="text-5xl animate-spin mb-6">⏳</div><h2 className="text-2xl font-black text-amber-800 animate-pulse">正在掃描雲端題庫...</h2>
+                    </div>
+                );
+            }
+
+            if (view === 'years') {
+                return (
+                    <div className="min-h-screen flex flex-col">
+                        <header className="bg-[#6B4E31] text-white shadow-md py-6 px-4">
+                            <div className="max-w-5xl mx-auto flex items-center gap-4">
+                                <button onClick={() => setView('home')} className="bg-[#543b24] hover:bg-[#3d2918] px-4 py-2 rounded-xl font-bold text-sm border border-[#856341]">◀ 返回首頁</button>
+                                <h1 className="text-2xl font-black"><span className="mr-3">{selectedSubject.icon}</span>{selectedSubject.name}</h1>
+                            </div>
+                        </header>
+                        <main className="flex-grow max-w-5xl mx-auto w-full px-4 py-8 space-y-8 animate-fadeIn">
+                            {availableYears.length === 0 ? (
+                                <div className="bg-white rounded-3xl p-10 border border-stone-100 soft-shadow text-center">
+                                    <div className="text-6xl mb-4">📭</div>
+                                    <h2 className="text-2xl font-bold text-stone-800 mb-2">此科目尚未上傳考題</h2>
+                                    <p className="text-stone-500">請進入「題庫管理後台」匯入 Excel。</p>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="bg-white rounded-3xl p-8 border border-stone-100 soft-shadow">
+                                        <h2 className="text-2xl font-bold text-stone-800 mb-6 border-l-4 border-[#8C6B4A] pl-4">📖 模式一：單一年度歷屆試題</h2>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                                            {availableYears.map(year => (
+                                                <button key={year} onClick={() => { setSelectedSingleYear(year); startExam('single', year); }} className="bg-stone-50 hover:bg-[#8C6B4A] hover:text-white text-stone-700 font-black text-lg py-4 rounded-xl border border-stone-200 shadow-sm transition-colors text-center">{year}年</button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="bg-white rounded-3xl p-8 border border-stone-100 soft-shadow">
+                                        <h2 className="text-2xl font-bold text-stone-800 mb-6 border-l-4 border-amber-500 pl-4">🎲 模式二：跨年度隨機抽題</h2>
+                                        <div className="grid grid-cols-3 md:grid-cols-6 gap-3 mb-6">
+                                            {availableYears.map(year => (
+                                                <label key={year} className={`cursor-pointer border-2 rounded-xl py-3 text-center font-bold ${selectedRandomYears.includes(year) ? 'bg-amber-50 border-amber-500 text-amber-900' : 'bg-white border-stone-200 text-stone-500'}`}>
+                                                    <input type="checkbox" className="hidden" checked={selectedRandomYears.includes(year)} onChange={() => toggleRandomYear(year)} />
+                                                    {selectedRandomYears.includes(year) && '✓ '} {year}
+                                                </label>
+                                            ))}
+                                        </div>
+                                        <button onClick={() => startExam('random')} disabled={selectedRandomYears.length === 0} className={`w-full py-4 rounded-xl font-black text-lg text-white shadow-md ${selectedRandomYears.length > 0 ? 'bg-amber-600' : 'bg-stone-300 cursor-not-allowed'}`}>開始隨機測驗</button>
+                                    </div>
+                                </>
+                            )}
+                        </main>
+                    </div>
+                );
+            }
+
+            if (view === 'exam') {
+                if (!examData) return <div className="min-h-screen flex items-center justify-center text-xl font-bold text-amber-800">📡 載入試卷中...</div>;
+
+                const changePage = (p) => { setCurrentPage(p); if(topRef.current) window.scrollTo({top: topRef.current.offsetTop - 20, behavior: 'smooth'}); };
+
+                // 📚 動態智能分頁引擎
+                const pages = [];
+                if (examData.mcq.length > 0) {
+                    const mcqPagesCount = Math.ceil(examData.mcq.length / ITEMS_PER_MCQ_PAGE);
+                    for (let i = 0; i < mcqPagesCount; i++) {
+                        pages.push({ type: 'mcq', pageIndex: i, title: `選擇 頁${i + 1}` });
+                    }
+                }
+                if (examData.non_mcq.length > 0) pages.push({ type: 'non_mcq', title: '非選擇題' });
+                if (examData.comprehensive.length > 0) pages.push({ type: 'comprehensive', title: '綜合情境題' });
+                
+                const TOTAL_PAGES = Math.max(1, pages.length);
+                const validCurrentPage = Math.min(currentPage, TOTAL_PAGES);
+                const currentData = pages.length > 0 ? pages[validCurrentPage - 1] : null;
+
+                const renderQuestionsWithTracker = (questions, startIdx = 0) => {
+                    let currentGroup = ""; // 確保每一頁獨立追蹤，不遺漏題組
+                    return questions.map((q, idx) => {
+                        const showGroup = q.group && q.group !== currentGroup;
+                        if (showGroup) currentGroup = q.group;
+                        const isOptionsMode = q.options && q.options.length > 0;
+                        const isMarked = markedQuestions.has(q.id);
+                        return (
+                            <React.Fragment key={q.id}>
+                                {showGroup && (
+                                    <div className="mb-5 mt-8 p-6 bg-[#f3efe8] border-l-4 border-[#8C6B4A] rounded-r-xl text-stone-800 font-medium whitespace-pre-line text-base shadow-sm">
+                                        <span className="font-black text-[#6B4E31] block mb-2 text-lg">📖 【題組情境】</span>{q.group}
+                                    </div>
+                                )}
+                                <div className={`bg-white p-6 md:p-8 rounded-2xl border ${isMarked ? 'border-amber-400 bg-amber-50/30' : 'border-stone-200'} soft-shadow mb-6 relative animate-fadeIn`}>
+                                    <div className="flex justify-between items-start">
+                                        <div className="flex-1"><QuestionContent q={q} idx={startIdx + idx} /></div>
+                                        <button onClick={() => toggleMark(q.id)} className={`shrink-0 ml-4 px-3 py-1.5 rounded-lg text-sm font-bold border transition-colors flex items-center gap-1 ${isMarked ? 'bg-amber-100 text-amber-800 border-amber-400' : 'bg-stone-50 text-stone-500 border-stone-200'}`}>
+                                            {isMarked ? '⭐ 已標記' : '☆ 標記'}
+                                        </button>
+                                    </div>
+                                    {isOptionsMode ? (
+                                        <div className="space-y-3 pl-8 mt-4">
+                                            {q.options.map((opt, oIdx) => {
+                                                const letter = String.fromCharCode(65 + oIdx);
+                                                const isSelected = userAnswers[q.id] === letter;
+                                                return (
+                                                    <button key={oIdx} onClick={() => setUserAnswers(prev => ({...prev, [q.id]: letter}))} className={`w-full text-left p-4 rounded-xl border-2 font-medium flex items-center transition-colors ${isSelected ? "bg-[#f5ece1] border-[#8C6B4A] text-[#6B4E31] font-bold" : "bg-white border-stone-200 text-stone-700"}`}>
+                                                        <span className={`shrink-0 w-6 h-6 mr-3 rounded-full border-2 flex items-center justify-center ${isSelected ? 'border-[#8C6B4A] bg-[#8C6B4A] text-white' : 'border-stone-300 text-transparent'}`}>{isSelected && '✓'}</span>{opt}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <textarea value={userTextAnswers[q.id] || ''} onChange={(e) => setUserTextAnswers(prev => ({...prev, [q.id]: e.target.value}))} className="w-full h-48 p-5 border-2 border-stone-200 rounded-xl bg-stone-50 font-medium ml-2 mt-4" placeholder="請在此輸入您的手寫作答內容..."></textarea>
+                                    )}
+                                </div>
+                            </React.Fragment>
+                        );
+                    });
+                };
+
+                let pageContent = <div className="text-center p-10 font-bold text-stone-500">此區塊目前沒有題目。</div>;
+                
+                if (currentData) {
+                    if (currentData.type === 'mcq') {
+                        const startIdx = currentData.pageIndex * ITEMS_PER_MCQ_PAGE;
+                        const mcqs = examData.mcq.slice(startIdx, startIdx + ITEMS_PER_MCQ_PAGE);
+                        const blockText = examData.mcq.find(q => q.block && q.block.trim() !== '')?.block;
+                        pageContent = (
+                            <div className="space-y-2">
+                                <h2 className="text-2xl font-black text-stone-800 mb-2 border-l-4 border-[#8C6B4A] pl-3">選擇題</h2>
+                                {blockText && (
+                                    <div className="mb-6 p-5 bg-stone-200/50 rounded-xl text-stone-700 font-medium whitespace-pre-line border-l-4 border-stone-400 text-[15px] shadow-sm animate-fadeIn">
+                                        <span className="font-bold text-stone-600 block mb-1">📝 【作答說明】</span>{blockText}
+                                    </div>
+                                )}
+                                {renderQuestionsWithTracker(mcqs, startIdx)}
+                            </div>
+                        );
+                    } else if (currentData.type === 'non_mcq') {
+                        const blockText = examData.non_mcq.find(q => q.block && q.block.trim() !== '')?.block;
+                        pageContent = (
+                            <div className="space-y-2">
+                                <h2 className="text-2xl font-black text-[#52604d] mb-2 border-l-4 border-[#6e8065] pl-3">非選擇題</h2>
+                                {blockText && (
+                                    <div className="mb-6 p-5 bg-[#eef1ed] rounded-xl text-[#445040] font-medium whitespace-pre-line border-l-4 border-[#6e8065] text-[15px] shadow-sm animate-fadeIn">
+                                        <span className="font-bold text-[#354032] block mb-1">📝 【作答說明】</span>{blockText}
+                                    </div>
+                                )}
+                                {renderQuestionsWithTracker(examData.non_mcq, 0)}
+                            </div>
+                        );
+                    } else if (currentData.type === 'comprehensive') {
+                        const blockText = examData.comprehensive.find(q => q.block && q.block.trim() !== '')?.block;
+                        pageContent = (
+                            <div className="space-y-2">
+                                <h2 className="text-2xl font-black text-[#855b38] mb-2 border-l-4 border-[#ab7b50] pl-3">綜合情境題</h2>
+                                {blockText && (
+                                    <div className="mb-6 p-5 bg-[#f5efe6] rounded-xl text-[#734f31] font-medium whitespace-pre-line border-l-4 border-[#ab7b50] text-[15px] shadow-sm animate-fadeIn">
+                                        <span className="font-bold text-[#5c3e25] block mb-1">📝 【作答說明】</span>{blockText}
+                                    </div>
+                                )}
+                                {renderQuestionsWithTracker(examData.comprehensive, 0)}
+                            </div>
+                        );
+                    }
+                }
+
+                return (
+                    <div className="min-h-screen pb-24 relative">
+                        <GlobalModal />
+                        <div className={`fixed top-5 right-5 z-[60] px-5 py-2.5 rounded-full shadow-lg backdrop-blur-md font-black tracking-widest border-2 transition-all duration-300 flex items-center gap-2 ${timeLeft <= 600 ? 'bg-rose-50/90 text-rose-600 border-rose-300 animate-pulse' : 'bg-white/90 text-amber-900 border-amber-200'}`}>
+                            <span className="text-xl">⏱️</span> {formatTime(timeLeft)}
+                        </div>
+                        <header className="bg-[#6B4E31] text-white shadow-md sticky top-0 z-50 p-4 flex justify-between items-center">
+                            <button onClick={() => setView('years')} className="bg-[#543b24] hover:bg-[#3d2918] px-4 py-2 rounded-lg font-bold text-sm border border-[#856341]">◀ 離開</button>
+                            <span className="font-black mr-28 md:mr-32">目前頁數 {validCurrentPage} / {TOTAL_PAGES}</span>
+                        </header>
+                        <main className="max-w-5xl mx-auto px-4 mt-6" ref={topRef}>
+                            <div className="bg-white p-4 rounded-2xl soft-shadow mb-8 flex gap-2 overflow-x-auto hide-scrollbar border border-stone-100">
+                                {pages.map((p, i) => (
+                                    <button key={i} onClick={() => changePage(i+1)} className={`px-5 py-2.5 rounded-xl text-sm font-bold border-2 whitespace-nowrap transition-colors ${validCurrentPage === i+1 ? 'bg-[#8C6B4A] text-white border-[#8C6B4A]' : 'bg-stone-50 text-stone-500 hover:border-[#b89574]'}`}>
+                                        {p.title}
+                                    </button>
+                                ))}
+                            </div>
+                            {pageContent}
+                        </main>
+                        <div className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-stone-200 p-4 flex justify-between z-50 max-w-5xl mx-auto">
+                            <div>
+                                <button onClick={() => changePage(validCurrentPage - 1)} disabled={validCurrentPage === 1} className="px-6 py-3 rounded-xl font-bold bg-stone-200 text-stone-600 mr-2 disabled:opacity-40">◀ 上一頁</button>
+                                <button onClick={() => changePage(validCurrentPage + 1)} disabled={validCurrentPage === TOTAL_PAGES} className="px-6 py-3 rounded-xl font-bold bg-[#f5ece1] text-[#8C6B4A] disabled:opacity-40 hover:bg-[#ebdccc]">下一頁 ▶</button>
+                            </div>
+                            <button onClick={handlePreSubmit} className="px-8 py-3 rounded-xl font-black text-white bg-amber-700 shadow-lg hover:bg-amber-800 transition-transform hover:-translate-y-1">✅ 交卷</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (view === 'result') {
+                const { score, count } = getScore();
+                const allMcqCount = examData.mcq.length + examData.comprehensive.filter(q => q.options && q.options.length > 0).length;
+
+                let rGroup = "";
+                const renderResultQuestions = (questions, typeColor) => {
+                    const filteredQuestions = questions.filter(q => {
+                        if (!showWrongOnly) return true;
+                        const isOptionsMode = q.options && q.options.length > 0;
+                        const isCorrect = isOptionsMode && userAnswers[q.id] === q.answer;
+                        const isMarked = markedQuestions.has(q.id);
+                        if (isOptionsMode && isCorrect && !isMarked) return false;
+                        return true;
+                    });
+                    if (filteredQuestions.length === 0) return <div className="p-8 text-center bg-stone-100 rounded-xl text-stone-500 font-medium mb-6 border border-dashed border-stone-300">此區塊無答錯或已標記之題目 🎉</div>;
+
+                    return filteredQuestions.map((q, i) => {
+                        const showGroup = q.group && q.group !== rGroup;
+                        if (showGroup) rGroup = q.group;
+                        const isOptionsMode = q.options && q.options.length > 0;
+                        const borderColor = typeColor === 'indigo' ? 'border-[#d4a373]' : (typeColor === 'emerald' ? 'border-[#a3b18a]' : 'border-[#e29578]');
+                        const isMarked = markedQuestions.has(q.id);
+
+                        return (
+                            <React.Fragment key={q.id}>
+                                {showGroup && <div className="mb-2 mt-4 p-5 bg-[#f3efe8] rounded-xl text-[#6B4E31] font-bold border-t-4 border-[#8C6B4A]">📖 題組：{q.group}</div>}
+                                <div className={`border-2 ${borderColor} p-6 rounded-2xl print-break-inside-avoid shadow-sm mb-6 bg-white relative ${isMarked ? 'bg-amber-50/20' : ''}`}>
+                                    {isMarked && <div className="absolute -top-3 -right-3 bg-amber-400 text-amber-900 font-black text-xs px-3 py-1 rounded-full shadow-md transform rotate-12">⭐ 標記</div>}
+                                    <QuestionContent q={q} idx={i} />
+                                    {isOptionsMode ? (
+                                        <div className={`ml-8 p-5 rounded-xl font-bold print-exact-colors ${userAnswers[q.id] === q.answer ? 'bg-[#edf1ed] text-[#3a5a40]' : 'bg-rose-50 text-rose-900'}`}>
+                                            <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-stone-700 font-medium pb-4 border-b border-stone-300/60">
+                                                {q.options.map((o, idx) => <div key={idx}>{o}</div>)}
+                                            </div>
+                                            作答：{userAnswers[q.id] || '未作答'} | 答案：{q.answer}
+                                            {q.explanation && <div className="mt-3 text-sm font-medium border-t pt-3 border-stone-300/60 leading-relaxed">解析：{q.explanation}</div>}
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="bg-stone-50 p-5 rounded-xl border border-stone-200 min-h-[80px] mb-4 text-stone-800 print-text-wrap whitespace-pre-line ml-8">{userTextAnswers[q.id] || <span className="text-stone-400 italic">（未作答）</span>}</div>
+                                            {q.method && <div className={`bg-stone-100 p-5 rounded-xl text-stone-700 text-sm font-medium print-exact-colors print-text-wrap whitespace-pre-line ml-8 border border-stone-200`}>官方參考：<br/>{q.method}</div>}
+                                        </>
+                                    )}
+                                </div>
+                            </React.Fragment>
+                        );
+                    });
+                };
+
+                return (
+                    <div className="min-h-screen pb-20">
+                        <div className="print-hidden bg-[#4a3623] text-white p-4 sticky top-0 flex justify-between z-50 shadow-md">
+                            <button onClick={() => setView('years')} className="bg-[#6B4E31] hover:bg-[#8C6B4A] px-5 py-2 rounded-lg font-bold">◀ 回選單</button>
+                            <button onClick={() => window.print()} className="bg-amber-600 hover:bg-amber-500 px-6 py-2 rounded-lg font-black flex items-center gap-2 shadow-lg">🖨️ 列印複習卷</button>
+                        </div>
+                        <div className="max-w-4xl mx-auto p-8 print:p-0 mt-4">
+                            <div className="border-b-4 border-[#6B4E31] pb-8 mb-8 text-center print-exact-colors">
+                                <h1 className="text-3xl font-black mb-3 text-stone-800">{selectedSubject.name} 測驗單</h1>
+                                <div className="mt-4 bg-white border-2 border-[#8C6B4A] rounded-3xl px-12 py-6 inline-block soft-shadow">
+                                    <p className="text-lg font-bold text-stone-500 mb-1">選擇題型得分</p>
+                                    <p className="text-6xl font-black text-[#8C6B4A] mb-1">{score} <span className="text-2xl text-stone-400">分</span></p>
+                                    <p className="text-sm font-bold text-stone-500 bg-stone-100 px-3 py-1 rounded-full inline-block">答對 {count} / {allMcqCount} 題</p>
+                                </div>
+                            </div>
+                            
+                            <div className="mb-10 flex justify-center print-hidden">
+                                <label className="flex items-center gap-3 cursor-pointer bg-white px-6 py-3 rounded-full border-2 border-stone-200 soft-shadow hover:border-amber-400 transition-colors select-none">
+                                    <div className="relative">
+                                        <input type="checkbox" className="sr-only wood-toggle" checked={showWrongOnly} onChange={(e) => setShowWrongOnly(e.target.checked)} />
+                                        <div className="block w-12 h-7 rounded-full bg-stone-300 transition-colors duration-300">
+                                            <div className="absolute left-1 top-1 bg-white w-5 h-5 rounded-full transition-transform duration-300 shadow-sm"></div>
+                                        </div>
+                                    </div>
+                                    <span className="font-bold text-stone-700 text-lg">👀 錯題本模式 (只看錯題與標記)</span>
+                                </label>
+                            </div>
+
+                            {examData.mcq.length > 0 && (
+                                <>
+                                    <h3 className="text-xl font-black bg-[#8C6B4A] text-white inline-block px-5 py-2.5 rounded-xl mb-5 shadow-sm">第一部分：選擇題</h3>
+                                    {examData.mcq.find(q => q.block && q.block.trim() !== '')?.block && <div className="mb-5 p-5 bg-stone-200/60 rounded-xl text-stone-700 font-bold border-l-4 border-stone-400 leading-relaxed">📝 作答說明：{examData.mcq.find(q => q.block).block}</div>}
+                                    <div className="mb-14">{renderResultQuestions(examData.mcq, 'indigo')}</div>
+                                </>
+                            )}
+                            {examData.non_mcq.length > 0 && (
+                                <>
+                                    <h3 className="text-xl font-black bg-[#52604d] text-white inline-block px-5 py-2.5 rounded-xl mb-5 print-page-break shadow-sm">第二部分：非選擇題</h3>
+                                    {examData.non_mcq.find(q => q.block && q.block.trim() !== '')?.block && <div className="mb-5 p-5 bg-[#eef1ed] rounded-xl text-[#445040] font-bold border-l-4 border-[#6e8065] leading-relaxed">📝 作答說明：{examData.non_mcq.find(q => q.block).block}</div>}
+                                    <div className="mb-14">{renderResultQuestions(examData.non_mcq, 'emerald')}</div>
+                                </>
+                            )}
+                            {examData.comprehensive.length > 0 && (
+                                <>
+                                    <h3 className="text-xl font-black bg-[#855b38] text-white inline-block px-5 py-2.5 rounded-xl mb-5 shadow-sm">第三部分：綜合情境題</h3>
+                                    {examData.comprehensive.find(q => q.block && q.block.trim() !== '')?.block && <div className="mb-5 p-5 bg-[#f5efe6] rounded-xl text-[#734f31] font-bold border-l-4 border-[#ab7b50] leading-relaxed">📝 作答說明：{examData.comprehensive.find(q => q.block).block}</div>}
+                                    <div className="mb-14">{renderResultQuestions(examData.comprehensive, 'amber')}</div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            if (view === 'admin') {
+                return (
+                    <div className="min-h-screen flex flex-col">
+                        <GlobalModal />
+                        <header className="bg-stone-900 text-white shadow-lg py-6 px-4">
+                            <div className="max-w-4xl mx-auto flex justify-between items-center">
+                                <h1 className="text-2xl font-black text-amber-500">⚙️ 題庫批次管理後台</h1>
+                                <button onClick={() => setView('home')} className="bg-stone-700 hover:bg-stone-600 px-5 py-2 rounded-xl font-bold text-sm transition-colors">◀ 回到前台</button>
+                            </div>
+                        </header>
+                        <main className="flex-grow p-4 sm:p-8 max-w-4xl mx-auto w-full">
+                            <div className="bg-white p-8 rounded-3xl soft-shadow border border-stone-100 mb-8">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
+                                    <div>
+                                        <label className="block text-sm font-bold text-stone-700 mb-2">1. 選擇年份</label>
+                                        <select onChange={e => setAdminYear(e.target.value)} value={adminYear} className="w-full p-4 border-2 border-stone-200 rounded-xl font-bold bg-stone-50 focus:border-amber-700 outline-none text-xl">
+                                            {YEARS.map(y => <option key={y} value={y}>{y}年度</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-stone-700 mb-2">2. 選擇科目</label>
+                                        <select onChange={e => setAdminSubject(e.target.value)} value={adminSubject} className="w-full p-4 border-2 border-stone-200 rounded-xl font-bold bg-stone-50 focus:border-amber-700 outline-none text-xl">
+                                            {SUBJECTS.map(s => <option key={s.dbPrefix} value={s.dbPrefix}>{s.name} ({s.dbPrefix})</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="mb-8 border-t border-stone-100 pt-8">
+                                    <label className="block text-sm font-bold text-stone-700 mb-3">3. 選擇準備好的 Excel 檔案 (.xlsx)</label>
+                                    <input type="file" accept=".xlsx, .xls" onChange={e => setFile(e.target.files[0])} className="block w-full text-stone-500 file:mr-4 file:py-3 file:px-6 file:rounded-xl file:border-0 file:text-sm file:font-bold file:bg-amber-100 file:text-amber-900 cursor-pointer hover:file:bg-amber-200 transition-colors" />
+                                </div>
+                                <div className="flex flex-col sm:flex-row gap-4">
+                                    <button onClick={handleUploadExcel} disabled={isUploading || isDeleting} className={`flex-1 font-black text-lg py-4 rounded-xl shadow-lg transition-all ${isUploading || isDeleting ? 'bg-stone-400 cursor-not-allowed' : 'bg-[#6B4E31] hover:bg-[#8C6B4A] text-white'}`}>
+                                        {isUploading ? '⏳ 寫入中...' : `🚀 寫入至 ${adminYear} 年度`}
+                                    </button>
+                                    <button onClick={handleDeleteCollection} disabled={isUploading || isDeleting} className={`flex-none px-6 font-black text-lg py-4 rounded-xl transition-all border-2 ${(isUploading || isDeleting) ? 'border-stone-300 text-stone-400 cursor-not-allowed' : 'border-rose-500 text-rose-600 hover:bg-rose-500 hover:text-white shadow-sm'}`}>
+                                        {isDeleting ? '⏳ 刪除中...' : '🗑️ 刪除此年份'}
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="bg-stone-900 p-6 rounded-3xl shadow-inner border border-stone-800">
+                                <h3 className="text-amber-500 font-bold mb-3 text-sm">執行日誌 (Log)</h3>
+                                <div className="h-56 overflow-y-auto font-mono text-sm space-y-1.5 hide-scrollbar">
+                                    {logs.map((l, i) => (
+                                        <div key={i} className={l.type === 'error' ? 'text-rose-400' : 'text-stone-300'}><span className="text-stone-500 mr-2">[{l.time}]</span> {l.message}</div>
+                                    ))}
+                                    {logs.length === 0 && <div className="text-stone-600 italic">等待操作中...</div>}
+                                </div>
+                            </div>
+                        </main>
+                    </div>
+                );
+            }
+
+            return null;
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
