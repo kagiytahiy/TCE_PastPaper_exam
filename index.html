@@ -52,7 +52,24 @@
 
         const YEARS = ['115', '114', '113', '112', '111', '110', '109', '108-2', '108-1', '107', '106', '105'];
 
-        // 超強效內容過濾器：自動濾除全形空白與隱藏換行
+        // 🚀 核心：強效記憶吐司 Hook (即使 F5 重新整理也能保留狀態)
+        const useStickyState = (defaultValue, key) => {
+            const [value, setValue] = useState(() => {
+                try {
+                    const stickyValue = sessionStorage.getItem(key);
+                    return stickyValue !== null ? JSON.parse(stickyValue) : defaultValue;
+                } catch (e) {
+                    return defaultValue;
+                }
+            });
+            useEffect(() => {
+                try {
+                    sessionStorage.setItem(key, JSON.stringify(value));
+                } catch (e) {}
+            }, [key, value]);
+            return [value, setValue];
+        };
+
         const hasRealContent = (str) => {
             if (!str) return false;
             const s = String(str).replace(/[\s\u3000]+/g, '');
@@ -119,7 +136,7 @@
             )
         };
 
-        const DropdownMenu = ({ readySubjects, fetchAvailableYears, setShowAuth }) => {
+        const DropdownMenu = ({ readySubjects, fetchAvailableYears, onAdminClick }) => {
             const [isOpen, setIsOpen] = useState(false);
             return (
                 <div className="fixed top-4 left-4 z-[300] print:hidden">
@@ -140,7 +157,7 @@
                                 );
                             })}
                             <div className="bg-[#f5ece1] px-4 py-2 text-xs font-black text-[#8c6b4a] tracking-widest mt-1">⚙️ 系統管理</div>
-                            <button onClick={() => { setIsOpen(false); setShowAuth(true); }} className="w-full text-left px-4 py-3 font-bold text-stone-700 text-sm hover:bg-stone-50 border-b border-stone-100 flex items-center gap-3">
+                            <button onClick={() => { setIsOpen(false); onAdminClick(); }} className="w-full text-left px-4 py-3 font-bold text-stone-700 text-sm hover:bg-stone-50 border-b border-stone-100 flex items-center gap-3">
                                 <span className="text-xl">🔐</span> 題庫管理後台
                             </button>
                             <div className="bg-stone-50 px-4 py-4 border-t border-stone-200">
@@ -156,7 +173,6 @@
             );
         };
 
-        // 🚀 新增 showGroup 參數，負責接收是否要顯示題組的指令
         const QuestionContent = React.memo(({ q, idx, showBlock, showGroup, isReviewMode, answers, setAnswers, markedQuestions, toggleMark }) => {
             const isMarked = markedQuestions[q.id];
             
@@ -169,7 +185,6 @@
                 </div>
             ) : null;
 
-            // 🚀 套用智慧去重：只有 showGroup 為 true 時，才印出這個綠色框框
             const groupDisplay = (showGroup && hasRealContent(q.group)) ? (
                 <div className="bg-emerald-50/90 backdrop-blur border border-emerald-200 p-4 mb-4 rounded-xl shadow-sm text-sm text-emerald-900 print:bg-transparent print:border-black print:shadow-none">
                     <div className="font-black mb-1 flex items-center gap-2 print:text-black"><span className="print-hidden">🏷️</span>【題組情境】</div>
@@ -195,9 +210,7 @@
             return (
                 <div className="mb-6 print-break-inside-avoid">
                     {blockDisplay}
-                    {groupDisplay}
-                    {q.image && hasRealContent(q.image) && <SmartImage src={q.image} />}
-                    
+                    {groupDisplay}                    
                     <div className="flex items-start gap-2 mb-3 mt-2">
                         <button onClick={() => toggleMark(q.id)} className={`print-hidden shrink-0 text-xl transition-transform hover:scale-110 ${isMarked ? 'text-amber-500' : 'text-stone-300'}`}>
                             {isMarked ? '★' : '☆'}
@@ -207,7 +220,8 @@
                         </div>
                         <div className="text-stone-800 font-medium leading-relaxed flex-grow whitespace-pre-wrap print:text-black" dangerouslySetInnerHTML={{ __html: String(q.text || '') }}></div>
                     </div>
-
+                    {/* 2. 圖片移到題目文字下方、選項上方 */}
+                    {q.image && hasRealContent(q.image) && <SmartImage src={q.image} />}
                     {showABCD && (
                         <div className="space-y-2 ml-10">
                             {['A', 'B', 'C', 'D'].map((opt, i) => {
@@ -262,7 +276,7 @@
             );
         });
 
-        const AdminPanel = ({ setView, firestoreDb }) => {
+        const AdminPanel = ({ setView, firestoreDb, stats, setStats, onLogout }) => {
             const [uploadYear, setUploadYear] = useState('114');
             const [uploadSubject, setUploadSubject] = useState('TC');
             const [file, setFile] = useState(null);
@@ -271,7 +285,31 @@
 
             const addLog = (message, type = "info") => setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), message, type }]);
 
-            const stats = { today: 128, week: 842, month: 3250, total: 15892 };
+            const handleResetStats = async () => {
+                const pwd = window.prompt("⚠️ 警告：這將會清空所有造訪人次記錄。\n請輸入歸零密碼：");
+                if (pwd === '660828') {
+                    try {
+                        const { doc, setDoc } = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
+                        const d = new Date();
+                        const dateString = d.toLocaleDateString();
+                        const monthString = `${d.getFullYear()}-${d.getMonth() + 1}`;
+                        const monday = new Date(d);
+                        monday.setDate(monday.getDate() - (d.getDay() || 7) + 1);
+                        const weekString = monday.toLocaleDateString();
+                        
+                        const resetData = { today: 0, week: 0, month: 0, total: 0, dateString, weekString, monthString };
+                        await setDoc(doc(firestoreDb, 'system', 'stats'), resetData);
+                        setStats(resetData);
+                        addLog('✅ 計數器已成功歸零！', 'success');
+                        alert('✅ 計數器已成功歸零！');
+                    } catch(e) {
+                        addLog('❌ 歸零失敗: ' + e.message, 'error');
+                        alert('❌ 歸零失敗，請檢查網路連線或權限。');
+                    }
+                } else if (pwd !== null) {
+                    alert('❌ 密碼錯誤，拒絕歸零。');
+                }
+            };
 
             const startUpload = () => {
                 if (!file) return alert("請先選擇 Excel 檔案！");
@@ -301,35 +339,25 @@
                             else if (!row['選項A']) qType = 'non_mcq';
 
                             const qId = String(row['題號'] || `item_${Math.random().toString(36).substr(2, 5)}`);
-                            
                             const rowBlock = row['區塊內容'] || row['區塊說明'] || row['作答說明'] || row['說明'];
                             
                             if (hasRealContent(rowBlock)) {
                                 currentBlock = rowBlock; 
                             } else if (rowBlock !== undefined && rowBlock !== null) {
                                 const cleanStr = String(rowBlock).replace(/[\s\u3000]+/g, '').toLowerCase();
-                                if (cleanStr === '無' || cleanStr === 'none' || cleanStr === '無圖') {
-                                    currentBlock = ""; 
-                                }
+                                if (cleanStr === '無' || cleanStr === 'none' || cleanStr === '無圖') currentBlock = ""; 
                             }
 
                             const item = {
-                                id: qId,
-                                type: qType,
-                                rawType: rawType,
-                                text: row['題目'] || "",
-                                image: row['圖片'] || "",
-                                block: currentBlock, 
-                                group: row['題組'] || ""
+                                id: qId, type: qType, rawType: rawType, text: row['題目'] || "", image: row['圖片'] || "",
+                                block: currentBlock, group: row['題組'] || ""
                             };
 
                             if (hasRealContent(row['選項A']) || hasRealContent(row['選項B'])) {
                                 item.options = [row['選項A'], row['選項B'], row['選項C'], row['選項D']].filter(hasRealContent);
                                 item.answer = String(row['正確/參考答案'] || "").trim().toUpperCase();
                             }
-                            
-                            item.explanation = row['詳解/評分標準'] || "";
-                            item.method = row['詳解/評分標準'] || "";
+                            item.explanation = row['詳解/評分標準'] || ""; item.method = row['詳解/評分標準'] || "";
 
                             await setDoc(doc(firestoreDb, collectionName, item.id), item);
                             addLog(`寫入: 第 ${item.id} 題 (${qType})`, "success");
@@ -358,25 +386,36 @@
                 <div className="flex-grow p-4 sm:p-8 max-w-4xl mx-auto w-full relative z-10 animate-fadeIn pt-16 md:pt-20">
                     <header className="flex justify-between items-center mb-6 bg-white/80 p-4 rounded-2xl shadow-sm backdrop-blur">
                         <h1 className="text-xl md:text-2xl font-black text-amber-700">⚙️ 題庫批次管理後台</h1>
-                        <button onClick={() => setView('home')} className="bg-stone-800 hover:bg-stone-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-md transition-all">◀ 回到前台</button>
+                        <div className="flex gap-2">
+                            <button onClick={() => setView('home')} className="bg-stone-800 hover:bg-stone-700 text-white px-4 md:px-5 py-2.5 rounded-xl font-bold shadow-md transition-all text-sm md:text-base">◀ 回前台</button>
+                            <button onClick={onLogout} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-4 md:px-5 py-2.5 rounded-xl font-bold shadow-sm transition-all border border-rose-200 text-sm md:text-base">登出</button>
+                        </div>
                     </header>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                        <div className="bg-white/95 p-4 rounded-2xl soft-shadow text-center border border-stone-200">
-                            <div className="text-stone-500 text-sm font-bold mb-1">今日造訪</div>
-                            <div className="text-2xl font-black text-amber-600">{stats.today}</div>
+                    <div className="mb-8">
+                        <div className="flex justify-between items-center mb-4 px-2">
+                            <h2 className="text-lg font-black text-stone-700">📊 系統造訪人次統計</h2>
+                            <button onClick={handleResetStats} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-4 py-2 rounded-xl font-bold text-sm shadow-sm transition-colors border border-rose-200 flex items-center gap-2">
+                                <span>🔄</span> 計數器歸零
+                            </button>
                         </div>
-                        <div className="bg-white/95 p-4 rounded-2xl soft-shadow text-center border border-stone-200">
-                            <div className="text-stone-500 text-sm font-bold mb-1">本週造訪</div>
-                            <div className="text-2xl font-black text-amber-600">{stats.week}</div>
-                        </div>
-                        <div className="bg-white/95 p-4 rounded-2xl soft-shadow text-center border border-stone-200">
-                            <div className="text-stone-500 text-sm font-bold mb-1">本月造訪</div>
-                            <div className="text-2xl font-black text-amber-600">{(stats.month).toLocaleString()}</div>
-                        </div>
-                        <div className="bg-white/95 p-4 rounded-2xl soft-shadow text-center border border-stone-200">
-                            <div className="text-stone-500 text-sm font-bold mb-1">累積總數</div>
-                            <div className="text-2xl font-black text-emerald-600">{(stats.total).toLocaleString()}</div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="bg-white/95 p-4 rounded-2xl soft-shadow text-center border border-stone-200">
+                                <div className="text-stone-500 text-sm font-bold mb-1">今日造訪</div>
+                                <div className="text-3xl font-black text-amber-600">{stats.today}</div>
+                            </div>
+                            <div className="bg-white/95 p-4 rounded-2xl soft-shadow text-center border border-stone-200">
+                                <div className="text-stone-500 text-sm font-bold mb-1">本週造訪</div>
+                                <div className="text-3xl font-black text-amber-600">{stats.week}</div>
+                            </div>
+                            <div className="bg-white/95 p-4 rounded-2xl soft-shadow text-center border border-stone-200">
+                                <div className="text-stone-500 text-sm font-bold mb-1">本月造訪</div>
+                                <div className="text-3xl font-black text-amber-600">{(stats.month).toLocaleString()}</div>
+                            </div>
+                            <div className="bg-white/95 p-4 rounded-2xl soft-shadow text-center border border-stone-200">
+                                <div className="text-stone-500 text-sm font-bold mb-1">累積總數</div>
+                                <div className="text-3xl font-black text-emerald-600">{(stats.total).toLocaleString()}</div>
+                            </div>
                         </div>
                     </div>
 
@@ -409,32 +448,40 @@
         };
 
         const App = () => {
-            const [view, setView] = useState('home'); 
+            // 🚀 套用記憶吐司 Hook：讓重新整理不會迷路
+            const [view, setView] = useStickyState('home', 'tce_view'); 
+            const [selectedSubject, setSelectedSubject] = useStickyState(null, 'tce_selectedSubject');
+            const [availableYears, setAvailableYears] = useStickyState([], 'tce_availableYears');
+            const [yearMode, setYearMode] = useStickyState('single', 'tce_yearMode');
+            const [selectedRandomYears, setSelectedRandomYears] = useStickyState([], 'tce_selectedRandomYears');
+            const [selectedYear, setSelectedYear] = useStickyState('', 'tce_selectedYear');
+            const [examData, setExamData] = useStickyState([], 'tce_examData');
+            const [answers, setAnswers] = useStickyState({}, 'tce_answers');
+            const [isReviewMode, setIsReviewMode] = useStickyState(false, 'tce_isReviewMode');
+            const [timeLeft, setTimeLeft] = useStickyState(80 * 60, 'tce_timeLeft');
+            const [currentTab, setCurrentTab] = useStickyState('mcq', 'tce_currentTab');
+            const [currentPage, setCurrentPage] = useStickyState(1, 'tce_currentPage');
+            const [markedQuestions, setMarkedQuestions] = useStickyState({}, 'tce_markedQuestions');
+            const [readySubjects, setReadySubjects] = useStickyState({}, 'tce_readySubjects');
+            
             const [showAuth, setShowAuth] = useState(false);
-            const [selectedSubject, setSelectedSubject] = useState(null);
-            
-            const [availableYears, setAvailableYears] = useState([]);
-            const [yearMode, setYearMode] = useState('single');
-            const [selectedRandomYears, setSelectedRandomYears] = useState([]);
-            
-            const [selectedYear, setSelectedYear] = useState('');
-            const [examData, setExamData] = useState([]);
-            const [answers, setAnswers] = useState({});
-            const [isReviewMode, setIsReviewMode] = useState(false);
+            const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(() => sessionStorage.getItem('adminAuth') === 'true');
             const [isPrinting, setIsPrinting] = useState(false);
-            
-            const [readySubjects, setReadySubjects] = useState({});
             const [firestoreDb, setFirestoreDb] = useState(null);
+            const [stats, setStats] = useState({ today: 0, week: 0, month: 0, total: 0 });
             
-            const [timeLeft, setTimeLeft] = useState(80 * 60);
-            const [currentTab, setCurrentTab] = useState('mcq');
-            const [currentPage, setCurrentPage] = useState(1);
-            const [markedQuestions, setMarkedQuestions] = useState({});
             const topRef = useRef(null);
-
             const ITEMS_PER_MCQ_PAGE = 5;
 
             const toggleMark = (qId) => setMarkedQuestions(prev => ({...prev, [qId]: !prev[qId]}));
+
+            const handleAdminAccess = () => isAdminLoggedIn ? setView('admin') : setShowAuth(true);
+
+            const handleLogout = () => {
+                setIsAdminLoggedIn(false);
+                sessionStorage.removeItem('adminAuth');
+                setView('home');
+            };
 
             useEffect(() => {
                 const initFirebase = async () => {
@@ -443,15 +490,47 @@
                         const fbAuth = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js');
                         const fbFirestore = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
                         const app = fbApp.initializeApp(MY_FIREBASE_CONFIG);
-                        setFirestoreDb(fbFirestore.getFirestore(app));
+                        const db = fbFirestore.getFirestore(app);
+                        setFirestoreDb(db);
                         await fbAuth.signInAnonymously(fbAuth.getAuth(app));
+
+                        try {
+                            const { doc, getDoc, setDoc } = fbFirestore;
+                            const statsRef = doc(db, 'system', 'stats');
+                            const snap = await getDoc(statsRef);
+                            const d = new Date();
+                            const dateString = d.toLocaleDateString();
+                            const monthString = `${d.getFullYear()}-${d.getMonth() + 1}`;
+                            const monday = new Date(d);
+                            monday.setDate(monday.getDate() - (d.getDay() || 7) + 1);
+                            const weekString = monday.toLocaleDateString();
+
+                            let currentStats = snap.exists() ? snap.data() : { today: 0, week: 0, month: 0, total: 0, dateString, weekString, monthString };
+                            
+                            if (currentStats.dateString !== dateString) currentStats.today = 0;
+                            if (currentStats.weekString !== weekString) currentStats.week = 0;
+                            if (currentStats.monthString !== monthString) currentStats.month = 0;
+
+                            if (!sessionStorage.getItem('visited')) {
+                                sessionStorage.setItem('visited', 'true');
+                                currentStats.today += 1;
+                                currentStats.week += 1;
+                                currentStats.month += 1;
+                                currentStats.total += 1;
+                                currentStats.dateString = dateString;
+                                currentStats.weekString = weekString;
+                                currentStats.monthString = monthString;
+                                await setDoc(statsRef, currentStats);
+                            }
+                            setStats(currentStats);
+                        } catch (err) { console.error("計數器系統讀取失敗", err); }
                     } catch (error) {}
                 };
                 initFirebase();
             }, []);
 
             useEffect(() => {
-                if (view === 'home' && firestoreDb) {
+                if (firestoreDb) {
                     const scanSubjects = async () => {
                         const { collection, query, limit, getDocs } = await loadFirebaseModule('https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js');
                         const newReady = {};
@@ -467,7 +546,7 @@
                     };
                     scanSubjects();
                 }
-            }, [view, firestoreDb]);
+            }, [firestoreDb]);
 
             useEffect(() => {
                 let timer;
@@ -526,7 +605,6 @@
                     const numB = parseInt(b.id.replace(/\D/g, '')) || 0;
                     return numA !== numB ? numA - numB : a.id.localeCompare(b.id);
                 });
-
                 setupExamState(questions, false);
             };
 
@@ -590,17 +668,11 @@
                     let standalones = groupedQuestions.mcq.filter(g => g.length === 1);
                     let realGroups = groupedQuestions.mcq.filter(g => g.length > 1);
 
-                    while (realGroups.length > 0 && mcqQuestions.length < 15) {
-                        mcqQuestions.push(...realGroups.shift());
-                    }
-                    while (standalones.length > 0 && mcqQuestions.length < 25) {
-                        mcqQuestions.push(...standalones.shift());
-                    }
-                    while (realGroups.length > 0 && mcqQuestions.length < 25) {
-                        mcqQuestions.push(...realGroups.shift());
-                    }
+                    while (realGroups.length > 0 && mcqQuestions.length < 15) mcqQuestions.push(...realGroups.shift());
+                    while (standalones.length > 0 && mcqQuestions.length < 25) mcqQuestions.push(...standalones.shift());
+                    while (realGroups.length > 0 && mcqQuestions.length < 25) mcqQuestions.push(...realGroups.shift());
+                    
                     finalQuestions.push(...mcqQuestions);
-
                     finalQuestions.push(...groupedQuestions.comprehensive.slice(0, 2).flat());
                     finalQuestions.push(...groupedQuestions.writing.slice(0, 1).flat());
                 } else {
@@ -609,7 +681,6 @@
                     });
                 }
 
-                // 清除作答說明（因應隨機抽題不顯示說明的需求）
                 const cleanFinalQuestions = finalQuestions.map(q => ({ ...q, block: '' }));
                 setupExamState(cleanFinalQuestions, true);
             };
@@ -640,10 +711,16 @@
                     {!isPrinting && <div className="fixed inset-0 z-[-2] bg-center bg-cover bg-fixed bg-no-repeat print:hidden" style={{ backgroundImage: "url('PU_Catholic_church.jpg')" }}></div>}
                     {!isPrinting && <div className="fixed inset-0 z-[-1] bg-white/65 print:hidden"></div>}
 
-                    <DropdownMenu readySubjects={readySubjects} fetchAvailableYears={fetchAvailableYears} setShowAuth={setShowAuth} />
+                    <DropdownMenu readySubjects={readySubjects} fetchAvailableYears={fetchAvailableYears} onAdminClick={handleAdminAccess} />
 
-                    {showAuth && !isPrinting && <AdminAuthModal onClose={() => setShowAuth(false)} onSuccess={() => setView('admin')} />}
+                    {showAuth && !isPrinting && <AdminAuthModal onClose={() => setShowAuth(false)} onSuccess={() => {
+                        setIsAdminLoggedIn(true);
+                        sessionStorage.setItem('adminAuth', 'true');
+                        setView('admin');
+                        setShowAuth(false);
+                    }} />}
 
+                    {}
                     {view === 'home' && !isPrinting && (
                         <div className="flex-grow flex flex-col relative">
                             <header className="relative pt-16 md:pt-20 pb-8 md:pb-12 mb-8">
@@ -718,7 +795,7 @@
                         </div>
                     )}
 
-                    {/* 獨立全螢幕的列印版面 */}
+                    {}
                     {isPrinting && (view === 'exam' || view === 'result') && (
                         <div className="bg-white w-full p-6 text-black min-h-screen print:p-0 print:m-0">
                             <h1 className="text-2xl font-black text-center mb-6 pb-4 border-b-2 border-black">
@@ -732,7 +809,6 @@
                                     <div key={type} className="mb-8">
                                         <h2 className="text-lg font-bold mb-4 bg-gray-100 p-2 border-l-4 border-black">{typeNames[type]}</h2>
                                         {qs.map((q, idx) => {
-                                            // 🚀 列印模式的智慧去重
                                             let showBlock = false;
                                             let showGroup = false;
                                             if (hasRealContent(q.block)) {
@@ -749,14 +825,10 @@
                         </div>
                     )}
 
-                    {/* 一般測驗與檢討版面 */}
+                    {}
                     {!isPrinting && (view === 'exam' || view === 'result') && (() => {
                         const mcqQuestions = examData.filter(q => q.type === 'mcq');
-                        const nonMcqQuestions = examData.filter(q => q.type === 'nonMcq'); // 安全考量維持舊的
-                        if (examData.filter(q => q.type === 'non_mcq').length > 0) {
-                             // 若有舊資料一併抓取
-                             nonMcqQuestions.push(...examData.filter(q => q.type === 'non_mcq'));
-                        }
+                        const nonMcqQuestions = examData.filter(q => q.type === 'non_mcq');
                         const compQuestions = examData.filter(q => q.type === 'comprehensive');
                         const writingQuestions = examData.filter(q => q.type === 'writing');
 
@@ -775,6 +847,18 @@
                         }
 
                         const mcqsAndCompsWithOptions = examData.filter(q => q.type === 'mcq' || (q.type === 'comprehensive' && q.options && q.options.length > 0));
+
+                        // 🚀 雙頁碼元件
+                        const paginationBlock = (!isOnlyWrong && currentTab === 'mcq' && TOTAL_PAGES > 1) ? (
+                            <div className="flex justify-center gap-2 flex-wrap">
+                                {Array.from({length: TOTAL_PAGES}).map((_, i) => (
+                                    <button key={i} onClick={() => { setCurrentPage(i + 1); topRef.current.scrollIntoView({behavior: 'smooth'}); }} 
+                                        className={`w-12 h-12 rounded-full font-black transition-all shadow-sm ${currentPage === i + 1 ? 'bg-amber-600 text-white scale-110' : 'bg-white/90 text-stone-500 hover:bg-stone-100'}`}>
+                                        {i + 1}
+                                    </button>
+                                ))}
+                            </div>
+                        ) : null;
 
                         return (
                             <div className="flex-grow flex flex-col relative pb-24 pt-16 md:pt-0">
@@ -818,6 +902,9 @@
                                     </div>
 
                                     <div className="bg-glass p-6 md:p-10 rounded-3xl soft-shadow border border-white">
+                                        {/* 🚀 頂部頁碼區 */}
+                                        {paginationBlock && <div className="mb-8">{paginationBlock}</div>}
+
                                         {currentQuestions.length === 0 ? (
                                             <div className="text-center py-12 text-stone-400 font-bold">本區塊尚無題目。</div>
                                         ) : (
@@ -830,7 +917,6 @@
                                                     displayIdx = globalIdx + 1;
                                                 }
 
-                                                // 🚀 線上測驗的智慧去重（包含作答說明與題組文章）
                                                 let showBlock = false;
                                                 let showGroup = false;
 
@@ -859,16 +945,8 @@
                                         )}
                                     </div>
 
-                                    {!isOnlyWrong && currentTab === 'mcq' && TOTAL_PAGES > 1 && (
-                                        <div className="mt-8 flex justify-center gap-2 flex-wrap">
-                                            {Array.from({length: TOTAL_PAGES}).map((_, i) => (
-                                                <button key={i} onClick={() => { setCurrentPage(i + 1); topRef.current.scrollIntoView({behavior: 'smooth'}); }} 
-                                                    className={`w-12 h-12 rounded-full font-black transition-all shadow-sm ${currentPage === i + 1 ? 'bg-amber-600 text-white scale-110' : 'bg-white/90 text-stone-500 hover:bg-stone-100'}`}>
-                                                    {i + 1}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
+                                    {/* 🚀 底部頁碼區 */}
+                                    {paginationBlock && <div className="mt-8">{paginationBlock}</div>}
 
                                     {!isReviewMode && (
                                         <div className="mt-12 text-center pb-8">
@@ -880,7 +958,7 @@
                         );
                     })()}
 
-                    {view === 'admin' && <AdminPanel setView={setView} firestoreDb={firestoreDb} />}
+                    {view === 'admin' && <AdminPanel setView={setView} firestoreDb={firestoreDb} stats={stats} setStats={setStats} onLogout={handleLogout} />}
                 </div>
             );
         };
