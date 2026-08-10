@@ -210,9 +210,7 @@
             return (
                 <div className="mb-6 print-break-inside-avoid">
                     {blockDisplay}
-                    {groupDisplay}
-                    {q.image && hasRealContent(q.image) && <SmartImage src={q.image} />}
-                    
+                    {groupDisplay}                    
                     <div className="flex items-start gap-2 mb-3 mt-2">
                         <button onClick={() => toggleMark(q.id)} className={`print-hidden shrink-0 text-xl transition-transform hover:scale-110 ${isMarked ? 'text-amber-500' : 'text-stone-300'}`}>
                             {isMarked ? '★' : '☆'}
@@ -222,7 +220,8 @@
                         </div>
                         <div className="text-stone-800 font-medium leading-relaxed flex-grow whitespace-pre-wrap print:text-black" dangerouslySetInnerHTML={{ __html: String(q.text || '') }}></div>
                     </div>
-
+                    {/* 2. 圖片移到題目文字下方、選項上方 */}
+                    {q.image && hasRealContent(q.image) && <SmartImage src={q.image} />}
                     {showABCD && (
                         <div className="space-y-2 ml-10">
                             {['A', 'B', 'C', 'D'].map((opt, i) => {
